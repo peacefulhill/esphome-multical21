@@ -13,7 +13,7 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include <vector>
-#include <mbedtls/aes.h>
+#include <psa/crypto.h>
 
 namespace esphome {
 namespace multical21 {
@@ -163,7 +163,8 @@ class Multical21Component : public PollingComponent,
 
   uint8_t meter_id_[4]{0};
   uint8_t aes_key_[16]{0};
-  mbedtls_aes_context aes_ctx_;  // mbedtls AES context
+  psa_key_handle_t aes_key_handle_{0};  // PSA key handle for AES key
+  bool aes_key_set_{false};
 
   // Sensors
   sensor::Sensor *total_consumption_sensor_{nullptr};
