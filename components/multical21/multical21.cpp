@@ -18,7 +18,37 @@ static const char *const TAG = "multical21";
 void Multical21Component::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Multical21 v%s...", VERSION);
 
-  // Note: mbedtls AES context is initialized in set_key() which is called before setup()
+  // If a key was provided earlier via set_key(), import it into PSA now.
+  if (this->aes_key_pending_) {
+    psa_status_t ps = psa_crypto_init();
+    if (ps != PSA_SUCCESS) {
+      ESP_LOGE(TAG, "psa_crypto_init failed in setup: %d", (int)ps);
+      this->aes_key_set_ = false;
+    } else {
+      // Destroy any existing key handle
+      if (this->aes_key_handle_ != 0) {
+        psa_destroy_key(this->aes_key_handle_);
+        this->aes_key_handle_ = 0;
+      }
+
+      psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+      psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+      psa_set_key_algorithm(&attr, PSA_ALG_CTR);
+      psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
+      psa_set_key_bits(&attr, 128);
+
+      ps = psa_import_key(&attr, this->aes_key_, sizeof(this->aes_key_), &this->aes_key_handle_);
+      psa_reset_key_attributes(&attr);
+
+      if (ps != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "psa_import_key failed in setup: %d", (int)ps);
+        this->aes_key_set_ = false;
+      } else {
+        this->aes_key_set_ = true;
+      }
+    }
+    this->aes_key_pending_ = false;
+  }
 
   // Setup GDO0 pin
   if (this->gdo0_pin_ != nullptr) {
@@ -110,38 +140,10 @@ void Multical21Component::set_meter_id(const std::string &meter_id) {
 void Multical21Component::set_key(const std::string &key) {
   if (key.length() >= 32) {
     this->hex_to_bytes(key, this->aes_key_, 16);
-    // Initialize PSA crypto and import AES key
-    psa_status_t ps = psa_crypto_init();
-    if (ps != PSA_SUCCESS) {
-      ESP_LOGE(TAG, "psa_crypto_init failed: %d", (int)ps);
-      this->aes_key_set_ = false;
-      return;
-    }
+    // Defer PSA import to setup() where runtime environment is ready
+    this->aes_key_pending_ = true;
 
-    // Destroy any existing key handle
-    if (this->aes_key_handle_ != 0) {
-      psa_destroy_key(this->aes_key_handle_);
-      this->aes_key_handle_ = 0;
-    }
-
-    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
-    psa_set_key_algorithm(&attr, PSA_ALG_CTR);
-    psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
-    psa_set_key_bits(&attr, 128);
-
-    ps = psa_import_key(&attr, this->aes_key_, sizeof(this->aes_key_), &this->aes_key_handle_);
-    psa_reset_key_attributes(&attr);
-
-    if (ps != PSA_SUCCESS) {
-      ESP_LOGE(TAG, "psa_import_key failed: %d", (int)ps);
-      this->aes_key_set_ = false;
-      return;
-    }
-
-    this->aes_key_set_ = true;
-
-    ESP_LOGD(TAG, "AES key set (first/last 4 bytes): %02X%02X%02X%02X...%02X%02X%02X%02X",
+    ESP_LOGD(TAG, "AES key stored (first/last 4 bytes): %02X%02X%02X%02X...%02X%02X%02X%02X",
              this->aes_key_[0], this->aes_key_[1], this->aes_key_[2], this->aes_key_[3],
              this->aes_key_[12], this->aes_key_[13], this->aes_key_[14], this->aes_key_[15]);
   }

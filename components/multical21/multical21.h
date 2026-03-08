@@ -165,6 +165,7 @@ class Multical21Component : public PollingComponent,
   uint8_t aes_key_[16]{0};
   psa_key_handle_t aes_key_handle_{0};  // PSA key handle for AES key
   bool aes_key_set_{false};
+  bool aes_key_pending_{false};
 
   // Sensors
   sensor::Sensor *total_consumption_sensor_{nullptr};
