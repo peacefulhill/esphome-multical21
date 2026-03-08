@@ -210,15 +210,25 @@ void Multical21Component::send_strobe(uint8_t strobe) {
 }
 
 bool Multical21Component::reset_cc1101() {
-  this->disable();
+  // Ensure SPI delegate is ready before performing transactions
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "SPI not ready during CC1101 reset - attempting spi_setup()");
+    this->spi_setup();
+    if (!this->spi_is_ready()) {
+      ESP_LOGE(TAG, "SPI still not ready after spi_setup(); cannot reset CC1101");
+      return false;
+    }
+  }
+
+  if (this->spi_is_ready()) this->disable();
   delayMicroseconds(5);
 
-  this->enable();
+  if (this->spi_is_ready()) this->enable();
   delayMicroseconds(10);
-  this->disable();
+  if (this->spi_is_ready()) this->disable();
   delayMicroseconds(45);
 
-  this->enable();
+  if (this->spi_is_ready()) this->enable();
   delayMicroseconds(5);
 
   this->transfer_byte(CC1101_SRES);
@@ -226,7 +236,7 @@ bool Multical21Component::reset_cc1101() {
   // Wait for reset to complete
   delay(10);
 
-  this->disable();
+  if (this->spi_is_ready()) this->disable();
 
   // Verify by reading a register
   uint8_t version = this->read_status_register(0x31);  // CC1101_VERSION
