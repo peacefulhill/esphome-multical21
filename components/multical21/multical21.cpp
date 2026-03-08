@@ -218,50 +218,65 @@ void Multical21Component::spi_end_tx() {
 }
 
 void Multical21Component::write_register(uint8_t reg, uint8_t value) {
-  this->enable();
+  if (!this->spi_begin_tx()) {
+    ESP_LOGE(TAG, "write_register: failed to begin SPI transaction");
+    return;
+  }
   delayMicroseconds(5);
   this->transfer_byte(reg);
   this->transfer_byte(value);
-  this->disable();
+  this->spi_end_tx();
 }
 
 uint8_t Multical21Component::read_register(uint8_t reg) {
-  this->enable();
+  if (!this->spi_begin_tx()) {
+    ESP_LOGE(TAG, "read_register: failed to begin SPI transaction");
+    return 0xFF;
+  }
   delayMicroseconds(5);
   this->transfer_byte(reg | READ_SINGLE);
   uint8_t value = this->transfer_byte(0x00);
-  this->disable();
+  this->spi_end_tx();
   return value;
 }
 
 uint8_t Multical21Component::read_status_register(uint8_t reg) {
-  this->enable();
+  if (!this->spi_begin_tx()) {
+    ESP_LOGE(TAG, "read_status_register: failed to begin SPI transaction");
+    return 0xFF;
+  }
   delayMicroseconds(5);
   this->transfer_byte(reg | READ_BURST);
   uint8_t value = this->transfer_byte(0x00);
-  this->disable();
+  this->spi_end_tx();
   return value;
 }
 
 // Read multiple bytes in a single SPI transaction (burst mode)
 // More efficient than multiple read_register() calls for sequential data
 void Multical21Component::read_burst(uint8_t reg, uint8_t *buffer, uint8_t len) {
-  this->enable();
+  if (!this->spi_begin_tx()) {
+    ESP_LOGE(TAG, "read_burst: failed to begin SPI transaction");
+    return;
+  }
   delayMicroseconds(5);
   this->transfer_byte(reg | READ_BURST);
   for (uint8_t i = 0; i < len; i++) {
     buffer[i] = this->transfer_byte(0x00);
   }
   delayMicroseconds(2);
-  this->disable();
+  this->spi_end_tx();
 }
 
 void Multical21Component::send_strobe(uint8_t strobe) {
-  this->enable();
+  if (!this->spi_begin_tx()) {
+    ESP_LOGE(TAG, "send_strobe: failed to begin SPI transaction");
+    return;
+  }
   delayMicroseconds(5);
   this->transfer_byte(strobe);
   delayMicroseconds(5);
-  this->disable();
+  this->spi_end_tx();
 }
 
 bool Multical21Component::reset_cc1101() {
