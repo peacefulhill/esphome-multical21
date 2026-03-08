@@ -17,6 +17,7 @@ static const char *const TAG = "multical21";
 
 void Multical21Component::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Multical21 v%s...", VERSION);
+  ESP_LOGD(TAG, "setup(): spi_is_ready()=%d", this->spi_is_ready());
 
   // If a key was provided earlier via set_key(), import it into PSA now.
   if (this->aes_key_pending_) {
@@ -49,6 +50,17 @@ void Multical21Component::setup() {
     }
     this->aes_key_pending_ = false;
   }
+
+  // Initialize SPI and give it a short window to become ready. Some build
+  // configurations (native ESP-IDF) may initialize hardware later than the
+  // Arduino-based build. Retry a few times to be robust.
+  ESP_LOGD(TAG, "Calling spi_setup() from setup()");
+  this->spi_setup();
+  for (int i = 0; i < 5 && !this->spi_is_ready(); i++) {
+    ESP_LOGD(TAG, "spi not ready yet (attempt %d), waiting...", i + 1);
+    delay(20);
+  }
+  ESP_LOGD(TAG, "after spi_setup(): spi_is_ready()=%d", this->spi_is_ready());
 
   // Setup GDO0 pin
   if (this->gdo0_pin_ != nullptr) {
@@ -210,33 +222,63 @@ void Multical21Component::send_strobe(uint8_t strobe) {
 }
 
 bool Multical21Component::reset_cc1101() {
-  // Ensure SPI delegate is ready before performing transactions
+  // Ensure SPI delegate is ready before performing transactions. Try a few
+  // times to initialize the bus; this helps when the bus is initialized
+  // later under certain build configurations.
   if (!this->spi_is_ready()) {
-    ESP_LOGW(TAG, "SPI not ready during CC1101 reset - attempting spi_setup()");
-    this->spi_setup();
-    if (!this->spi_is_ready()) {
-      ESP_LOGE(TAG, "SPI still not ready after spi_setup(); cannot reset CC1101");
+    ESP_LOGW(TAG, "SPI not ready during CC1101 reset - attempting spi_setup() with retries");
+    bool ok = false;
+    for (int attempt = 0; attempt < 6; attempt++) {
+      this->spi_setup();
+      if (this->spi_is_ready()) {
+        ok = true;
+        ESP_LOGD(TAG, "spi ready after attempt %d", attempt + 1);
+        break;
+      }
+      delay(25);
+    }
+    if (!ok) {
+      ESP_LOGE(TAG, "SPI still not ready after retries; cannot reset CC1101");
       return false;
     }
   }
 
-  if (this->spi_is_ready()) this->disable();
+  ESP_LOGD(TAG, "reset_cc1101(): performing HW reset sequence");
+  // Safe enable/disable around sequence with logging
+  if (this->spi_is_ready()) {
+    ESP_LOGD(TAG, "reset_cc1101(): disable before reset");
+    this->disable();
+  }
   delayMicroseconds(5);
 
-  if (this->spi_is_ready()) this->enable();
+  if (this->spi_is_ready()) {
+    ESP_LOGD(TAG, "reset_cc1101(): enable");
+    this->enable();
+  }
   delayMicroseconds(10);
-  if (this->spi_is_ready()) this->disable();
+
+  if (this->spi_is_ready()) {
+    ESP_LOGD(TAG, "reset_cc1101(): disable");
+    this->disable();
+  }
   delayMicroseconds(45);
 
-  if (this->spi_is_ready()) this->enable();
+  if (this->spi_is_ready()) {
+    ESP_LOGD(TAG, "reset_cc1101(): enable for SRES");
+    this->enable();
+  }
   delayMicroseconds(5);
 
+  ESP_LOGD(TAG, "reset_cc1101(): sending SRES strobe");
   this->transfer_byte(CC1101_SRES);
 
   // Wait for reset to complete
   delay(10);
 
-  if (this->spi_is_ready()) this->disable();
+  if (this->spi_is_ready()) {
+    ESP_LOGD(TAG, "reset_cc1101(): disable after reset");
+    this->disable();
+  }
 
   // Verify by reading a register
   uint8_t version = this->read_status_register(0x31);  // CC1101_VERSION
