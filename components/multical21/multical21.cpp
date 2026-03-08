@@ -74,9 +74,9 @@ void Multical21Component::setup() {
   // configurations the SPI device may already be registered before this
   // component's setup() is called; avoid registering twice which can cause
   // "Device already" errors in the driver.
-  ESP_LOGD(TAG, "setup(): delegate_=%p, spi_is_ready()=%d", (void *) this->delegate_, this->spi_is_ready());
-  if (!this->spi_is_ready() && this->delegate_ == spi::SPIDelegate::NULL_DELEGATE) {
-    ESP_LOGD(TAG, "setup(): calling spi_setup() because delegate is NULL and spi not ready");
+  ESP_LOGD(TAG, "setup(): spi_is_ready()=%d", this->spi_is_ready());
+  if (!this->spi_is_ready()) {
+    ESP_LOGD(TAG, "setup(): calling spi_setup() because spi not ready");
     this->spi_setup();
   } else {
     ESP_LOGD(TAG, "setup(): skipping spi_setup() (already ready/registered)");
