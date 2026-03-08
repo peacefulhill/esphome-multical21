@@ -158,8 +158,14 @@ class Multical21Component : public PollingComponent,
 
   // Utility
   void hex_to_bytes(const std::string &hex, uint8_t *bytes, size_t len);
+  // SPI transaction helpers to avoid mismatched acquire/release
+  bool spi_begin_tx();
+  void spi_end_tx();
 
   GPIOPin *gdo0_pin_{nullptr};
+
+  // Track whether this component started an SPI transaction
+  bool spi_tx_active_{false};
 
   uint8_t meter_id_[4]{0};
   uint8_t aes_key_[16]{0};

@@ -62,6 +62,9 @@ void Multical21Component::setup() {
   }
   ESP_LOGD(TAG, "after spi_setup(): spi_is_ready()=%d", this->spi_is_ready());
 
+  // Ensure transaction flag is cleared at startup
+  this->spi_tx_active_ = false;
+
   // Setup GDO0 pin
   if (this->gdo0_pin_ != nullptr) {
     this->gdo0_pin_->setup();
@@ -174,6 +177,37 @@ void Multical21Component::hex_to_bytes(const std::string &hex, uint8_t *bytes, s
   }
 }
 
+bool Multical21Component::spi_begin_tx() {
+  if (this->spi_tx_active_) {
+    ESP_LOGD(TAG, "spi_begin_tx: already active");
+    return true;
+  }
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "spi_begin_tx: spi not ready, attempting spi_setup()");
+    this->spi_setup();
+    if (!this->spi_is_ready()) {
+      ESP_LOGE(TAG, "spi_begin_tx: spi still not ready");
+      return false;
+    }
+  }
+
+  // Try to start transaction; enable() may internally fail to acquire the bus but
+  // we still mark active only after calling enable(). This prevents end_tx from
+  // calling disable() when we didn't start.
+  this->enable();
+  this->spi_tx_active_ = true;
+  return true;
+}
+
+void Multical21Component::spi_end_tx() {
+  if (!this->spi_tx_active_) {
+    ESP_LOGD(TAG, "spi_end_tx: no active transaction, skipping disable");
+    return;
+  }
+  this->disable();
+  this->spi_tx_active_ = false;
+}
+
 void Multical21Component::write_register(uint8_t reg, uint8_t value) {
   this->enable();
   delayMicroseconds(5);
@@ -243,31 +277,19 @@ bool Multical21Component::reset_cc1101() {
     }
   }
 
-  ESP_LOGD(TAG, "reset_cc1101(): performing HW reset sequence");
-  // Safe enable/disable around sequence with logging
-  if (this->spi_is_ready()) {
-    ESP_LOGD(TAG, "reset_cc1101(): disable before reset");
-    this->disable();
-  }
-  delayMicroseconds(5);
+  ESP_LOGD(TAG, "reset_cc1101(): performing HW reset sequence (using guarded transactions)");
 
-  if (this->spi_is_ready()) {
-    ESP_LOGD(TAG, "reset_cc1101(): enable");
-    this->enable();
+  // Use guarded SPI begin/end to avoid releasing a lock we didn't acquire.
+  if (!this->spi_begin_tx()) {
+    ESP_LOGE(TAG, "reset_cc1101(): failed to begin SPI transaction");
+    return false;
   }
+
+  // small pulse cycle
+  ESP_LOGD(TAG, "reset_cc1101(): pulse sequence start");
+  delayMicroseconds(5);
   delayMicroseconds(10);
-
-  if (this->spi_is_ready()) {
-    ESP_LOGD(TAG, "reset_cc1101(): disable");
-    this->disable();
-  }
   delayMicroseconds(45);
-
-  if (this->spi_is_ready()) {
-    ESP_LOGD(TAG, "reset_cc1101(): enable for SRES");
-    this->enable();
-  }
-  delayMicroseconds(5);
 
   ESP_LOGD(TAG, "reset_cc1101(): sending SRES strobe");
   this->transfer_byte(CC1101_SRES);
@@ -275,10 +297,7 @@ bool Multical21Component::reset_cc1101() {
   // Wait for reset to complete
   delay(10);
 
-  if (this->spi_is_ready()) {
-    ESP_LOGD(TAG, "reset_cc1101(): disable after reset");
-    this->disable();
-  }
+  this->spi_end_tx();
 
   // Verify by reading a register
   uint8_t version = this->read_status_register(0x31);  // CC1101_VERSION
