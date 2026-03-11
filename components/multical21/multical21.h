@@ -150,7 +150,7 @@ class Multical21Component : public PollingComponent,
   bool decrypt_frame(const uint8_t *payload, uint8_t length);
   void parse_meter_data(const uint8_t *data, uint8_t length);
 
-  // AES-128 CTR decryption (using mbedtls)
+  // AES-128 CTR decryption (using PSA)
   void aes_ctr_decrypt(const uint8_t *cipher, uint8_t *plain, uint8_t length, const uint8_t *iv);
 
   // CRC calculation
@@ -171,7 +171,7 @@ class Multical21Component : public PollingComponent,
   uint8_t aes_key_[16]{0};
   psa_key_handle_t aes_key_handle_{0};  // PSA key handle for AES key
   bool aes_key_set_{false};
-  bool aes_key_pending_{false};
+  // Note: keys are imported immediately when `set_key()` is called.
 
   // Sensors
   sensor::Sensor *total_consumption_sensor_{nullptr};

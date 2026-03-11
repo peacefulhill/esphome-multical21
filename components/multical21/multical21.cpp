@@ -19,48 +19,19 @@ void Multical21Component::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Multical21 v%s...", VERSION);
   ESP_LOGD(TAG, "setup(): spi_is_ready()=%d", this->spi_is_ready());
 
-  // If a key was provided earlier via set_key(), import it into PSA now.
-  if (this->aes_key_pending_) {
-    psa_status_t ps = psa_crypto_init();
-    if (ps != PSA_SUCCESS) {
-      ESP_LOGE(TAG, "psa_crypto_init failed in setup: %d", (int)ps);
-      this->aes_key_set_ = false;
-    } else {
-      // Destroy any existing key handle
-      if (this->aes_key_handle_ != 0) {
-        psa_destroy_key(this->aes_key_handle_);
-        this->aes_key_handle_ = 0;
-      }
-
-      psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
-      psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
-      psa_set_key_algorithm(&attr, PSA_ALG_CTR);
-      psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
-      psa_set_key_bits(&attr, 128);
-
-      ps = psa_import_key(&attr, this->aes_key_, sizeof(this->aes_key_), &this->aes_key_handle_);
-      psa_reset_key_attributes(&attr);
-
-      if (ps != PSA_SUCCESS) {
-        ESP_LOGE(TAG, "psa_import_key failed in setup: %d", (int)ps);
-        this->aes_key_set_ = false;
-      } else {
-        this->aes_key_set_ = true;
-      }
-    }
-    this->aes_key_pending_ = false;
-  }
-
   // Initialize SPI and give it a short window to become ready. Some build
   // configurations (native ESP-IDF) may initialize hardware later than the
-  // Arduino-based build. Retry a few times to be robust.
-  ESP_LOGD(TAG, "Calling spi_setup() from setup()");
+  // Arduino-based build. Try a small number of attempts and warn if still
+  // not ready.
+  ESP_LOGD(TAG, "Initializing SPI");
   this->spi_setup();
-  for (int i = 0; i < 5 && !this->spi_is_ready(); i++) {
+  for (int i = 0; i < 3 && !this->spi_is_ready(); i++) {
     ESP_LOGD(TAG, "spi not ready yet (attempt %d), waiting...", i + 1);
     delay(20);
   }
-  ESP_LOGD(TAG, "after spi_setup(): spi_is_ready()=%d", this->spi_is_ready());
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "SPI not ready after setup attempts");
+  }
 
   // Ensure transaction flag is cleared at startup
   this->spi_tx_active_ = false;
@@ -68,18 +39,6 @@ void Multical21Component::setup() {
   // Setup GDO0 pin
   if (this->gdo0_pin_ != nullptr) {
     this->gdo0_pin_->setup();
-  }
-
-  // Initialize SPI only if not already registered/ready. Under some build
-  // configurations the SPI device may already be registered before this
-  // component's setup() is called; avoid registering twice which can cause
-  // "Device already" errors in the driver.
-  ESP_LOGD(TAG, "setup(): spi_is_ready()=%d", this->spi_is_ready());
-  if (!this->spi_is_ready()) {
-    ESP_LOGD(TAG, "setup(): calling spi_setup() because spi not ready");
-    this->spi_setup();
-  } else {
-    ESP_LOGD(TAG, "setup(): skipping spi_setup() (already ready/registered)");
   }
 
   // Reset and initialize CC1101
@@ -164,8 +123,35 @@ void Multical21Component::set_meter_id(const std::string &meter_id) {
 void Multical21Component::set_key(const std::string &key) {
   if (key.length() >= 32) {
     this->hex_to_bytes(key, this->aes_key_, 16);
-    // Defer PSA import to setup() where runtime environment is ready
-    this->aes_key_pending_ = true;
+    // Import key into PSA immediately. This simplifies lifecycle handling
+    // and avoids deferred state.
+    psa_status_t ps = psa_crypto_init();
+    if (ps != PSA_SUCCESS) {
+      ESP_LOGE(TAG, "psa_crypto_init failed in set_key: %d", (int)ps);
+      this->aes_key_set_ = false;
+    } else {
+      // Destroy any existing key handle
+      if (this->aes_key_handle_ != 0) {
+        psa_destroy_key(this->aes_key_handle_);
+        this->aes_key_handle_ = 0;
+      }
+
+      psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+      psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+      psa_set_key_algorithm(&attr, PSA_ALG_CTR);
+      psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
+      psa_set_key_bits(&attr, 128);
+
+      ps = psa_import_key(&attr, this->aes_key_, sizeof(this->aes_key_), &this->aes_key_handle_);
+      psa_reset_key_attributes(&attr);
+
+      if (ps != PSA_SUCCESS) {
+        ESP_LOGE(TAG, "psa_import_key failed in set_key: %d", (int)ps);
+        this->aes_key_set_ = false;
+      } else {
+        this->aes_key_set_ = true;
+      }
+    }
 
     ESP_LOGD(TAG, "AES key stored (first/last 4 bytes): %02X%02X%02X%02X...%02X%02X%02X%02X",
              this->aes_key_[0], this->aes_key_[1], this->aes_key_[2], this->aes_key_[3],
@@ -286,14 +272,14 @@ bool Multical21Component::reset_cc1101() {
   if (!this->spi_is_ready()) {
     ESP_LOGW(TAG, "SPI not ready during CC1101 reset - attempting spi_setup() with retries");
     bool ok = false;
-    for (int attempt = 0; attempt < 6; attempt++) {
+    for (int attempt = 0; attempt < 3; attempt++) {
       this->spi_setup();
       if (this->spi_is_ready()) {
         ok = true;
         ESP_LOGD(TAG, "spi ready after attempt %d", attempt + 1);
         break;
       }
-      delay(25);
+      delay(20);
     }
     if (!ok) {
       ESP_LOGE(TAG, "SPI still not ready after retries; cannot reset CC1101");
