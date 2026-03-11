@@ -33,8 +33,7 @@ void Multical21Component::setup() {
     ESP_LOGW(TAG, "SPI not ready after setup attempts");
   }
 
-  // Ensure transaction flag is cleared at startup
-  this->spi_tx_active_ = false;
+  // Ensure any runtime SPI state is clean at startup
 
   // Setup GDO0 pin
   if (this->gdo0_pin_ != nullptr) {
