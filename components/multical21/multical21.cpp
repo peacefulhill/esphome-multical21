@@ -172,97 +172,93 @@ void Multical21Component::hex_to_bytes(const std::string &hex, uint8_t *bytes, s
   }
 }
 
-bool Multical21Component::spi_begin_tx() {
-  if (this->spi_tx_active_) {
-    ESP_LOGD(TAG, "spi_begin_tx: already active");
-    return true;
-  }
-  if (!this->spi_is_ready()) {
-    ESP_LOGW(TAG, "spi_begin_tx: spi not ready, attempting spi_setup()");
-    this->spi_setup();
-    if (!this->spi_is_ready()) {
-      ESP_LOGE(TAG, "spi_begin_tx: spi still not ready");
-      return false;
-    }
-  }
 
-  // Try to start transaction; enable() may internally fail to acquire the bus but
-  // we still mark active only after calling enable(). This prevents end_tx from
-  // calling disable() when we didn't start.
-  this->enable();
-  this->spi_tx_active_ = true;
-  return true;
-}
-
-void Multical21Component::spi_end_tx() {
-  if (!this->spi_tx_active_) {
-    ESP_LOGD(TAG, "spi_end_tx: no active transaction, skipping disable");
-    return;
-  }
-  this->disable();
-  this->spi_tx_active_ = false;
-}
 
 void Multical21Component::write_register(uint8_t reg, uint8_t value) {
-  if (!this->spi_begin_tx()) {
-    ESP_LOGE(TAG, "write_register: failed to begin SPI transaction");
-    return;
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "write_register: spi not ready, attempting spi_setup()");
+    this->spi_setup();
+    if (!this->spi_is_ready()) {
+      ESP_LOGE(TAG, "write_register: spi still not ready");
+      return;
+    }
   }
+  this->enable();
   delayMicroseconds(5);
   this->transfer_byte(reg);
   this->transfer_byte(value);
-  this->spi_end_tx();
+  this->disable();
 }
 
 uint8_t Multical21Component::read_register(uint8_t reg) {
-  if (!this->spi_begin_tx()) {
-    ESP_LOGE(TAG, "read_register: failed to begin SPI transaction");
-    return 0xFF;
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "read_register: spi not ready, attempting spi_setup()");
+    this->spi_setup();
+    if (!this->spi_is_ready()) {
+      ESP_LOGE(TAG, "read_register: spi still not ready");
+      return 0xFF;
+    }
   }
+  this->enable();
   delayMicroseconds(5);
   this->transfer_byte(reg | READ_SINGLE);
   uint8_t value = this->transfer_byte(0x00);
-  this->spi_end_tx();
+  this->disable();
   return value;
 }
 
 uint8_t Multical21Component::read_status_register(uint8_t reg) {
-  if (!this->spi_begin_tx()) {
-    ESP_LOGE(TAG, "read_status_register: failed to begin SPI transaction");
-    return 0xFF;
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "read_status_register: spi not ready, attempting spi_setup()");
+    this->spi_setup();
+    if (!this->spi_is_ready()) {
+      ESP_LOGE(TAG, "read_status_register: spi still not ready");
+      return 0xFF;
+    }
   }
+  this->enable();
   delayMicroseconds(5);
   this->transfer_byte(reg | READ_BURST);
   uint8_t value = this->transfer_byte(0x00);
-  this->spi_end_tx();
+  this->disable();
   return value;
 }
 
 // Read multiple bytes in a single SPI transaction (burst mode)
 // More efficient than multiple read_register() calls for sequential data
 void Multical21Component::read_burst(uint8_t reg, uint8_t *buffer, uint8_t len) {
-  if (!this->spi_begin_tx()) {
-    ESP_LOGE(TAG, "read_burst: failed to begin SPI transaction");
-    return;
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "read_burst: spi not ready, attempting spi_setup()");
+    this->spi_setup();
+    if (!this->spi_is_ready()) {
+      ESP_LOGE(TAG, "read_burst: spi still not ready");
+      return;
+    }
   }
+  this->enable();
   delayMicroseconds(5);
   this->transfer_byte(reg | READ_BURST);
   for (uint8_t i = 0; i < len; i++) {
     buffer[i] = this->transfer_byte(0x00);
   }
   delayMicroseconds(2);
-  this->spi_end_tx();
+  this->disable();
 }
 
 void Multical21Component::send_strobe(uint8_t strobe) {
-  if (!this->spi_begin_tx()) {
-    ESP_LOGE(TAG, "send_strobe: failed to begin SPI transaction");
-    return;
+  if (!this->spi_is_ready()) {
+    ESP_LOGW(TAG, "send_strobe: spi not ready, attempting spi_setup()");
+    this->spi_setup();
+    if (!this->spi_is_ready()) {
+      ESP_LOGE(TAG, "send_strobe: spi still not ready");
+      return;
+    }
   }
+  this->enable();
   delayMicroseconds(5);
   this->transfer_byte(strobe);
   delayMicroseconds(5);
-  this->spi_end_tx();
+  this->disable();
 }
 
 bool Multical21Component::reset_cc1101() {
@@ -287,13 +283,15 @@ bool Multical21Component::reset_cc1101() {
     }
   }
 
-  ESP_LOGD(TAG, "reset_cc1101(): performing HW reset sequence (using guarded transactions)");
+  ESP_LOGD(TAG, "reset_cc1101(): performing HW reset sequence");
 
-  // Use guarded SPI begin/end to avoid releasing a lock we didn't acquire.
-  if (!this->spi_begin_tx()) {
-    ESP_LOGE(TAG, "reset_cc1101(): failed to begin SPI transaction");
+  // Perform a direct SPI transaction: enable -> strobe -> disable. We
+  // already checked readiness above.
+  if (!this->spi_is_ready()) {
+    ESP_LOGE(TAG, "reset_cc1101(): SPI not ready when attempting reset");
     return false;
   }
+  this->enable();
 
   // small pulse cycle
   ESP_LOGD(TAG, "reset_cc1101(): pulse sequence start");
@@ -307,7 +305,7 @@ bool Multical21Component::reset_cc1101() {
   // Wait for reset to complete
   delay(10);
 
-  this->spi_end_tx();
+  this->disable();
 
   // Verify by reading a register
   uint8_t version = this->read_status_register(0x31);  // CC1101_VERSION
